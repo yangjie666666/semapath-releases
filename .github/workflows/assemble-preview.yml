@@ -1,0 +1,61 @@
+name: Assemble public preview download
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing preview release tag
+        required: true
+        type: string
+      asset_ids:
+        description: Ordered split asset IDs from this repository
+        required: true
+        type: string
+      installer_sha256:
+        description: Expected complete installer SHA256
+        required: true
+        type: string
+      zero_budget_confirmed:
+        description: Public standard runner only, no artifact or cache storage
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: assemble-arm-preview
+  cancel-in-progress: false
+
+jobs:
+  assemble:
+    if: inputs.zero_budget_confirmed
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.release_tag }}
+      ASSET_IDS: ${{ inputs.asset_ids }}
+      INSTALLER_SHA256: ${{ inputs.installer_sha256 }}
+    steps:
+      - name: Assemble and verify the already-built installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == 'yangjie666666/semapath-releases' ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-arm-preview\.[0-9]+$ ]]
+          [[ "$ASSET_IDS" =~ ^[0-9]+(,[0-9]+){0,7}$ ]]
+          [[ "$INSTALLER_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          name="semapath-${RELEASE_TAG#v}-windows-x64.exe"
+          IFS=',' read -r -a parts <<< "$ASSET_IDS"
+          touch "$name"
+          for asset in "${parts[@]}"; do
+            gh api "repos/$GITHUB_REPOSITORY/releases/assets/$asset" -H 'Accept: application/octet-stream' > "part-$asset"
+            cat "part-$asset" >> "$name"
+            rm "part-$asset"
+          done
+          printf '%s  %s\n' "$INSTALLER_SHA256" "$name" > SHA256SUMS.txt
+          sha256sum --check SHA256SUMS.txt
+          gh release upload "$RELEASE_TAG" "$name" SHA256SUMS.txt --repo "$GITHUB_REPOSITORY"
+          cat SHA256SUMS.txt >> "$GITHUB_STEP_SUMMARY"
